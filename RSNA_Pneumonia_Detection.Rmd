@@ -1,0 +1,393 @@
+---
+title: "RSNA_Pneumonia_Detection"
+output: html_document
+---
+
+```{r LoadLib, echo=TRUE}
+setwd("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection")
+library(magick)
+library(stringi)
+library(keras)
+```
+
+#Create folders for image deep learning training classification.
+```{r CreateFolders, echo=TRUE}
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train/normal")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train/lung_op")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/validation")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/validation/normal")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/validation/lung_op")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/normal")
+dir.create("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/lung_op")
+```
+#Loading CSV for both classification & later croping.
+```{r LoadCSV, echo=TRUE}
+RSNA_train_detailed <- read.csv(file = "stage_1_detailed_class_info.csv", header = FALSE, sep = ",", skip = 1)
+colnames(RSNA_train_detailed) <- c("imgID", "class")
+RSNA_train_labeled <- read.csv(file = "stage_1_train_labels.csv", header = FALSE, sep = ",", skip = 1)
+colnames(RSNA_train_labeled) <- c("patientId", "x", "y", "width", "height", "target")
+RSNA_train_lung_op <- na.omit(RSNA_train_labeled)
+```
+
+#Feaguring out how to crop the not noraml & normal cases.
+```{r CalcLocation, echo=TRUE}
+AvgMinXCrop <- floor(mean(RSNA_train_lung_op$x) - sd(RSNA_train_lung_op$x))
+AvgMinYCrop <- floor(mean(RSNA_train_lung_op$y) - sd(RSNA_train_lung_op$y))
+WidthCrop <- floor(mean(RSNA_train_lung_op$width) + sd(RSNA_train_lung_op$width))
+HeightCrop <- floor(mean(RSNA_train_lung_op$height) + sd(RSNA_train_lung_op$height))
+```
+#Calculating location & croping size.
+```{r ClacTrainCrop, echo=TRUE}
+i <- 1
+for (i in 1:length(RSNA_train_detailed$class)){
+  if (RSNA_train_labeled$target[i] == 0){
+    RSNA_train_labeled$x <- AvgMinXCrop
+    RSNA_train_labeled$y <- AvgMinYCrop
+    RSNA_train_labeled$width <- WidthCrop
+    RSNA_train_labeled$height <- HeightCrop
+   } else if(RSNA_train_detailed$class[i] == 'Lung Opacity'){
+    
+  }
+ i <- i + 1
+}
+
+```
+
+#Converting train set into jpeg files & croping according to averages.
+```{r TrainCrop, echo=TRUE}
+i <- 1
+for (i in 1:length(RSNA_train_labeled$patientId)) {
+	  OrigConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_train_images/", RSNA_train_labeled$patientId[i], ".dcm", "")
+  img <- image_read(OrigConvFile)
+  crop <- paste0(RSNA_train_labeled$width[i], "x", RSNA_train_labeled$height[i], "+", RSNA_train_labeled$x[i], "+", RSNA_train_labeled$y[i], "")
+  img <- image_crop(img, crop)
+  img <- image_scale(img, "96x96")
+  img1 <- image_colorize(img, 20, "red")
+  img2 <- image_colorize(img, 20, "green")  
+  img3 <- c(img1, img2)
+  img <- image_append(image_scale(img3, "x200"))
+  if(RSNA_train_labeled$target[i] == 1) {
+    NewConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train/lung_op/", RSNA_train_labeled$patientId[i], ".jpeg", "")
+  } else if(RSNA_train_labeled$target[i] == 0){
+	NewConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train/normal/", RSNA_train_labeled$patientId[i], ".jpeg", "")
+  }
+  image_write(image_convert(img, "jpeg"), path = NewConvFile, format = "jpeg")
+  i <- i + 1
+}
+```
+#Handling cross validation for deep learning.
+#Sampling train datasets 5% per each cross validation.
+```{r HandlingValidation, echo=TRUE}
+vlidation_normal <- head(RSNA_train_labeled[which(RSNA_train_labeled$target == 0),], 1000)
+vlidation_lung_op <- head(RSNA_train_labeled[which(RSNA_train_labeled$target == 1),], 500)
+validation <- rbind(vlidation_normal, vlidation_lung_op)
+RSNA_train_labeled <- RSNA_train_labeled[!RSNA_train_labeled$patientId %in% validation$patientId,]
+
+#Handling images from train -> validation folders
+i <- 1
+for (i in 1:length(validation$patientId)) {
+  
+if (validation$target[i] == 1){
+  FromWhere <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train/lung_op/", validation$patientId[i], ".jpeg", "")
+  ToWhere <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/validation/lung_op/", validation$patientId[i], ".jpeg", "")
+} else if(validation$target[i] == 0){
+  FromWhere <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train/normal/", validation$patientId[i], ".jpeg", "")
+  ToWhere <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/validation/normal/", validation$patientId[i], ".jpeg", "")
+} 
+file.rename(from = FromWhere, to = ToWhere) 
+i <- i + 1
+}
+```
+#Croping predicted images 
+```{r PredictCrop, echo=TRUE}
+testList <- dir("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_test_images")
+i <- 1
+testList <- dir("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_test_images")
+for (i in 1:500) {
+  OrigConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_test_images/", testList[i], "")
+  img <- image_read(OrigConvFile)
+  crop <- paste0(WidthCrop, "x", HeightCrop, "+", AvgMinXCrop, "+", AvgMinYCrop, "")
+  img <- image_crop(img, crop)
+   NewConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/normal/", testList[i], ".jpeg", "")
+  image_write(image_convert(img, "jpeg"), path = NewConvFile, format = "jpeg")
+  i <- i + 1
+}
+for (i in 501:1000) {
+  OrigConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_test_images/", testList[i], "")
+  img <- image_read(OrigConvFile)
+  crop <- paste0(WidthCrop, "x", HeightCrop, "+", AvgMinXCrop, "+", AvgMinYCrop, "")
+  img <- image_crop(img, crop)
+   NewConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/lung_op/", testList[i], ".jpeg", "")
+  image_write(image_convert(img, "jpeg"), path = NewConvFile, format = "jpeg")
+  i <- i + 1
+}
+```
+
+#Deep Learning 
+```{r DeepLearning, echo=TRUE}
+Pneumonia_list <- c("normal", "lung_op")
+# number of output classes
+output_n <- 2
+
+# image size to scale down to (original images are 54 x 96 px)
+img_width <- 54
+img_height <- 96
+target_size <- c(img_width, img_height)
+
+#RGB = 3 channels
+channels <- 3
+
+#Path to image folders
+train_image_files_path <- "G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/train"
+valid_image_files_path <- "G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/validation"
+# optional data augmentation
+train_data_gen = image_data_generator(
+  rescale = 1/255 #,
+  #rotation_range = 40,
+  #width_shift_range = 0.2,
+  #height_shift_range = 0.2,
+  #shear_range = 0.2,
+  #zoom_range = 0.2,
+  #horizontal_flip = TRUE,
+  #fill_mode = "nearest"
+)
+
+# Validation data shouldn't be augmented! But it should also be scaled.
+valid_data_gen <- image_data_generator(
+  rescale = 1/255
+  )
+# training images
+train_image_array_gen <- flow_images_from_directory(train_image_files_path, 
+                                          train_data_gen,
+                                          target_size = target_size,
+                                          class_mode = "categorical",
+                                          classes = Pneumonia_list,
+                                          seed = 42)
+
+# validation images
+valid_image_array_gen <- flow_images_from_directory(valid_image_files_path, 
+                                          valid_data_gen,
+                                          target_size = target_size,
+                                          class_mode = "categorical",
+                                          classes = Pneumonia_list,
+                                          seed = 42)
+
+cat("Number of images per class:")
+## Number of images per class:
+table(factor(train_image_array_gen$classes))
+cat("\nClass label vs index mapping:\n")
+## Class label vs index mapping:
+train_image_array_gen$class_indices
+
+Pneumonia_classes_indices <- train_image_array_gen$class_indices
+# number of training samples
+train_samples <- train_image_array_gen$n
+# number of validation samples
+valid_samples <- valid_image_array_gen$n
+
+# define batch size and number of epochs
+batch_size <- 50
+epochs <- 32
+
+# initialise model
+model <- keras_model_sequential()
+
+# add layers
+model %>%
+  layer_conv_2d(filter = 32, kernel_size = c(3,3), padding = "same", input_shape = c(img_width, img_height, channels)) %>%
+  layer_activation("relu") %>%
+  
+  #Second hidden layer
+  layer_conv_2d(filter = 32, kernel_size = c(3,3), padding = "same") %>%
+  layer_activation_leaky_relu(0.5) %>%
+  layer_batch_normalization() %>%
+
+  #Use max pooling
+  layer_max_pooling_2d(pool_size = c(2,2)) %>%
+  layer_dropout(0.25) %>%
+  
+  #Flatten max filtered output into feature vector 
+  # and feed into dense layer
+  layer_flatten() %>%
+  layer_dense(100) %>%
+  layer_activation("relu") %>%
+  layer_dropout(0.5) %>%
+
+  #Outputs from dense layer are projected onto output layer
+  layer_dense(output_n) %>% 
+  layer_activation("softmax")
+
+#Compile model
+model %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_rmsprop(lr = 0.0001, decay = 1e-6),
+  metrics = "accuracy"
+)
+# Fit DL model
+hist <- model %>% fit_generator(
+  # training data
+  train_image_array_gen,
+  
+  # epochs
+  steps_per_epoch = as.integer(train_samples / batch_size), 
+  epochs = epochs, 
+  
+  # validation data
+  validation_data = valid_image_array_gen,
+  validation_steps = as.integer(valid_samples / batch_size),
+  
+  # print progress
+  verbose = 2,
+  callbacks = list(
+    # save best model after every epoch
+    callback_model_checkpoint("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/Pneumonia_checkpoints.h5", save_best_only = TRUE),
+    # only needed for visualising with TensorBoard
+    callback_tensorboard(log_dir = "G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection")
+  )
+)
+```
+
+#Load DL model
+```{r PredictionPart, echo=TRUE, eval=FALSE}
+model2 <- load_model_hdf5(filepath = "G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/Pneumonia_checkpoints.h5")
+TotalPredictions <- data.frame()
+
+#Building prediction foldersb & run image predictions
+testList <- dir("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_test_images")
+w <- 1
+for (w in 1:floor(length(testList) / 8)) {
+i <- (w - 1) * 8 + 1
+j <- i + 7
+k <- j + 1
+l <- k + 7
+
+for (i in i:j) {
+  OrigConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_test_images/", testList[i], "")
+  img <- image_read(OrigConvFile)
+  crop <- paste0(WidthCrop, "x", HeightCrop, "+", AvgMinXCrop, "+", AvgMinYCrop, "")
+  img <- image_crop(img, crop)
+  img <- image_scale(img, "96x96")
+  img1 <- image_colorize(img, 20, "red")
+  img2 <- image_colorize(img, 20, "green")  
+  img3 <- c(img1, img2)
+  img <- image_append(image_scale(img3, "x200"))
+   NewConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/normal/", testList[i], ".jpeg", "")
+  image_write(image_convert(img, "jpeg"), path = NewConvFile, format = "jpeg")
+  i <- i + 1
+}
+for (i in k:l) {
+  OrigConvFile <- paste0("./stage_1_test_images/", testList[i], "")
+  img <- image_read(OrigConvFile)
+  crop <- paste0(WidthCrop, "x", HeightCrop, "+", AvgMinXCrop, "+", AvgMinYCrop, "")
+  img <- image_crop(img, crop)
+  img <- image_scale(img, "96x96")
+  img1 <- image_colorize(img, 20, "red")
+  img2 <- image_colorize(img, 20, "green")  
+  img3 <- c(img1, img2)
+  img <- image_append(image_scale(img3, "x200"))
+   NewConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/lung_op/", testList[i], ".jpeg", "")
+  image_write(image_convert(img, "jpeg"), path = NewConvFile, format = "jpeg")
+  i <- i + 1
+}
+
+test_image_files_path <- "G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test"
+
+test_datagen <- image_data_generator(rescale = 1/255)
+test_generator <- flow_images_from_directory(
+        test_image_files_path,
+        test_datagen,
+        target_size = c(54, 96),
+        class_mode = 'categorical')
+
+predictions <- as.data.frame(predict_generator(model2, test_generator, steps = 1)) #matrix of elements
+Pneumonia_classes_indices_df <- data.frame(indices = unlist(Pneumonia_classes_indices)) #categories
+Pneumonia_classes_indices_df <- Pneumonia_classes_indices_df[order(Pneumonia_classes_indices_df$indices), , drop = FALSE]
+colnames(predictions) <- rownames(Pneumonia_classes_indices_df)
+predictions <- round(predictions, digits = 2)
+predictions$patientId <- as.character(test_generator$filenames)
+predictions$PredictionString <- 0
+
+##Merge into single prediction dataframe
+TotalPredictions <- rbind(TotalPredictions, predictions)
+
+##Delete
+files.to.delete <- dir("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/normal",pattern=".[0-9]",recursive=T,full.names=T)
+file.remove(files.to.delete)
+files.to.delete <- dir("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/lung_op",pattern=".[0-9]",recursive=T,full.names=T)
+file.remove(files.to.delete)
+
+w <- w + 1
+}
+
+#Last prediction 8 of 1000 predicted images
+#testList1 <- tail(testList, 8)
+#i <- 1
+#for (i in 1:8) {
+#  OrigConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/stage_1_test_images/", testList1[i], "")
+#  img <- image_read(OrigConvFile)
+#  crop <- paste0(WidthCrop, "x", HeightCrop, "+", AvgMinXCrop, "+", AvgMinYCrop, "")
+#  img <- image_crop(img, crop)
+#  img <- image_scale(img, "96x96")
+#  img1 <- image_colorize(img, 20, "red")
+#  img2 <- image_colorize(img, 20, "green")  
+#  img3 <- c(img1, img2)
+#  img <- image_append(image_scale(img3, "x200"))
+#   NewConvFile <- paste0("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/normal/", testList1[i], ".jpeg", "")
+#  image_write(image_convert(img, "jpeg"), path = NewConvFile, format = "jpeg")
+#  i <- i + 1
+#}
+#test_image_files_path <- "G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test"
+
+#test_datagen <- image_data_generator(rescale = 1/255)
+#test_generator <- flow_images_from_directory(
+#        test_image_files_path,
+#        test_datagen,
+#        target_size = c(54, 96),
+#        class_mode = 'categorical')
+
+#predictions <- as.data.frame(predict_generator(model2, test_generator, steps = 1)) #matrix of elements
+#Pneumonia_classes_indices_df <- data.frame(indices = #unlist(Pneumonia_classes_indices)) #categories
+#Pneumonia_classes_indices_df <- #Pneumonia_classes_indices_df[order(Pneumonia_classes_indices_df$indices), , drop = FALSE]
+#colnames(predictions) <- rownames(Pneumonia_classes_indices_df)
+#predictions <- round(predictions, digits = 2)
+#predictions$patientId <- as.character(test_generator$filenames)
+#predictions$PredictionString <- 0
+
+##Merge into single prediction dataframe
+#TotalPredictions <- rbind(TotalPredictions, predictions)
+
+##Delete
+#files.to.delete <- dir("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/normal",pattern=".[0-9]",recursive=T,full.names=T)
+#file.remove(files.to.delete)
+#files.to.delete <- dir("G:/DataScienceProject/Kaggle_RSNA_Pneumonia_Detection/test/lung_op",pattern=".[0-9]",recursive=T,full.names=T)
+#file.remove(files.to.delete)
+
+#i <- 1
+#for (i in 1:length(TotalPredictions$patientId)){
+#	if (nchar(TotalPredictions$patientId[i]) == 53){
+#		TotalPredictions$patientId[i] <- #stri_sub(TotalPredictions$patientId[i],9,nchar(TotalPredictions$patientId#[i]) - 9)
+#	} else if(nchar(TotalPredictions$patientId[i]) == 52){
+#		TotalPredictions$patientId[i] <- stri_sub(TotalPredictions$patientId[i],8,nchar(TotalPredictions$patientId[i]) - 9)
+#	} else if (nchar(TotalPredictions$patientId[i]) < 51){
+#	}
+#	i <- i + 1
+##}
+```
+#Predict the correlation & Pneumonia expected location
+```{r, PredictCorrelation, echo=TRUE}
+i <- 1
+for (i in 1:length(TotalPredictions$patientId)){
+	if(TotalPredictions$lung_op[i] > 85){
+		TotalPredictions$PredictionString[i]  <- paste0(round(TotalPredictions$lung_op[i], digits = 2), " ", AvgMinXCrop, " ", AvgMinYCrop, " ", WidthCrop, " ", HeightCrop)
+	} else if (TotalPredictions$lung_op[i] < 85){
+		TotalPredictions$PredictionString[i]  <- paste0(round(TotalPredictions$lung_op[i], digits = 2) , " 0 0 768 768", collapse = ",")
+	}
+	i <- i + 1
+}
+
+#Tide the prediction table.
+TotalPredictions <- TotalPredictions[,c("patientId", "PredictionString")]
+write.csv(TotalPredictions, file = "TotalPredictions.csv", row.names = FALSE)
+```
